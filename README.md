@@ -1,4 +1,4 @@
-# DeliverSafe — Parametric Income Insurance for Delivery Partners
+# DeliverSafe — AI-Powered Parametric Insurance for Delivery Partners
 
 > Protecting the daily earnings of food delivery workers from weather, pollution, and sudden disruptions — automatically, fairly, and in real time.
 
