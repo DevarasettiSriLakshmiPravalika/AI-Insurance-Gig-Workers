@@ -1,8 +1,11 @@
+com/deliverysafe/service/TrustScoreService.class
 com/deliverysafe/repository/PayoutRepository.class
 com/deliverysafe/controller/PayoutController.class
 com/deliverysafe/service/RiskDetectionService.class
 com/deliverysafe/repository/UserRepository.class
 com/deliverysafe/DeliverySafeApplication.class
+com/deliverysafe/service/TrustScoreService$TrustEvaluation.class
 com/deliverysafe/dto/WeatherRequest.class
+com/deliverysafe/dto/DecisionResponse.class
 com/deliverysafe/model/Payout.class
 com/deliverysafe/model/User.class

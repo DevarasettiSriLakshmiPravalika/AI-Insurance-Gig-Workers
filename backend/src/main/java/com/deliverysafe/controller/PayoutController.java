@@ -1,5 +1,6 @@
 package com.deliverysafe.controller;
 
+import com.deliverysafe.dto.DecisionResponse;
 import com.deliverysafe.dto.WeatherRequest;
 import com.deliverysafe.model.Payout;
 import com.deliverysafe.model.User;
@@ -11,7 +12,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api")
@@ -47,9 +47,16 @@ public class PayoutController {
     }
 
     @PostMapping("/users/{id}/weather")
-    public ResponseEntity<Payout> reportWeather(@PathVariable Long id, @RequestBody WeatherRequest request) {
-        Optional<Payout> payout = riskDetectionService.processWeather(id, request);
-        return payout.map(ResponseEntity::ok).orElse(ResponseEntity.noContent().build());
+    public ResponseEntity<DecisionResponse> reportWeather(@PathVariable Long id, @RequestBody WeatherRequest request) {
+        DecisionResponse response = riskDetectionService.processWeather(id, request);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/users/{id}/simulate")
+    public ResponseEntity<DecisionResponse> simulateScenario(@PathVariable Long id, @RequestBody WeatherRequest request) {
+        // Alias for /weather to fit "SimulationController" narrative logic mentally, functionally identical for now
+        DecisionResponse response = riskDetectionService.processWeather(id, request);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/users/{id}/payouts")

@@ -12,7 +12,8 @@ import {
   Activity,
   Wallet,
   ShieldCheck,
-  Zap
+  Zap,
+  ArrowRight
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
@@ -54,7 +55,7 @@ export default function Dashboard() {
     rainfall: 10,
   });
   
-  const [trustScore, setTrustScore] = useState<number>(92);
+  const [trustScore, setTrustScore] = useState<number>(95);
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>('None');
   const [suspiciousActivity, setSuspiciousActivity] = useState<boolean>(false);
   const [payoutAmount, setPayoutAmount] = useState<number>(0);
@@ -87,64 +88,88 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (alertMsg) {
-      const timer = setTimeout(() => setAlertMsg(null), 5000);
+      const timer = setTimeout(() => setAlertMsg(null), 8000);
       return () => clearTimeout(timer);
     }
   }, [alertMsg]);
 
-  const simulateDisruption = async (type: 'rain' | 'aqi' | 'heat') => {
+  // Main wrapper for hitting the decision engine
+  const triggerDecisionEngine = async (weatherUpdate: WeatherState, speed: number, inconsistent: boolean) => {
     if (!user) return;
+    setWeather(weatherUpdate);
+    
+    // UI placeholder until network returns
+    setSuspiciousActivity(inconsistent || speed > 80);
 
+    try {
+      const res = await fetch(`${API_BASE_URL}/users/${user.id}/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          temperature: weatherUpdate.temp,
+          rainfall: weatherUpdate.rainfall,
+          aqi: weatherUpdate.aqi,
+          speed: speed,
+          inconsistentActivity: inconsistent
+        })
+      });
+
+      if (res.status === 200) {
+        const decision = await res.json();
+        setTrustScore(decision.trustScore);
+        setStatus(decision.systemStatus === 'DISRUPTED' ? 'Disrupted' : 'Active');
+
+        if (decision.payoutTriggered) {
+            setPayoutAmount(decision.payoutDetails.amount);
+            if (decision.payoutDetails.status === 'INSTANT') {
+                setClaimStatus('Approved');
+                setAlertMsg(`Engine Decision: DISRUPTED due to ${decision.payoutDetails.reason} -> Trust [LOW RISK] -> Instant Payout Triggered!`);
+            } else if (decision.payoutDetails.status === 'DELAYED') {
+                setClaimStatus('Pending');
+                setAlertMsg(`Engine Decision: DISRUPTED -> Trust [MEDIUM RISK] -> Delayed Payout initiated.`);
+            } else {
+                setClaimStatus('Flagged');
+                setAlertMsg(`Engine Decision: DISRUPTED -> Trust [HIGH RISK] -> Payout Flagged for Review!`);
+            }
+            fetchPayoutHistory(user.id);
+        } else {
+            setClaimStatus('None');
+            setPayoutAmount(0);
+            setAlertMsg("Engine Decision: Conditions SAFE. No payout triggered.");
+        }
+      }
+    } catch (err) {
+      console.error("Failed to query decision engine", err);
+    }
+  };
+
+  const simulateSafe = () => {
+      triggerDecisionEngine({ condition: 'Clear', aqi: 45, temp: 32, rainfall: 10 }, 40, false);
+  }
+
+  const simulateDisruption = (type: 'rain' | 'aqi' | 'heat') => {
     let weatherUpdate: WeatherState;
     if (type === 'rain') {
       weatherUpdate = { condition: 'Heavy Rain', aqi: 42, temp: 24, rainfall: 60 };
     } else if (type === 'aqi') {
       weatherUpdate = { condition: 'Smog', aqi: 312, temp: 34, rainfall: 5 };
     } else {
-      weatherUpdate = { condition: 'Extreme Heat', aqi: 65, temp: 46, rainfall: 0 };
+      weatherUpdate = { condition: 'Extreme Heat', aqi: 48, temp: 48, rainfall: 0 };
     }
-
-    setWeather(weatherUpdate);
-    setStatus('Disrupted');
-
-    try {
-      const res = await fetch(`${API_BASE_URL}/users/${user.id}/weather`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          temperature: weatherUpdate.temp,
-          rainfall: weatherUpdate.rainfall,
-          aqi: weatherUpdate.aqi
-        })
-      });
-
-      if (res.status === 200) {
-        const payout = await res.json();
-        setPayoutAmount(payout.amount);
-        setClaimStatus('Approved');
-        setAlertMsg(`Disruption Detected: ${payout.reason}. Payout Triggered!`);
-        fetchPayoutHistory(user.id);
-      } else {
-        setAlertMsg("Environment condition updated. No payout threshold met.");
-        setClaimStatus('None');
-        setStatus('Active');
-      }
-    } catch (err) {
-      console.error("Failed to report weather", err);
-    }
+    // Normal speeds, no fraud -> leads to instant payout
+    triggerDecisionEngine(weatherUpdate, 40, false);
   };
 
   const simulateFraud = () => {
-    setTrustScore(40);
-    setSuspiciousActivity(true);
-    setClaimStatus('Flagged');
-    setAlertMsg('⚠️ Suspicious behavior detected (possible GPS spoofing)');
+    // Extreme Heat + Ridiculous Speed (Fraud)
+    const weatherUpdate = { condition: 'Extreme Heat', aqi: 65, temp: 48, rainfall: 0 };
+    triggerDecisionEngine(weatherUpdate, 150, true);
   };
 
   const resetSimulation = () => {
     setStatus('Active');
     setWeather({ condition: 'Clear', aqi: 45, temp: 32, rainfall: 10 });
-    setTrustScore(92);
+    setTrustScore(95);
     setClaimStatus('None');
     setSuspiciousActivity(false);
     setPayoutAmount(0);
@@ -159,16 +184,20 @@ export default function Dashboard() {
                 initial={{ opacity: 0, y: -50 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -50 }}
-                className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md px-4"
+                className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-2xl px-4"
             >
                 <div className={cn(
-                "p-4 rounded-2xl shadow-2xl border backdrop-blur-md flex items-start gap-3",
-                suspiciousActivity 
+                "p-4 rounded-2xl shadow-2xl border backdrop-blur-md flex flex-col gap-1 items-start justify-center",
+                status === 'Active' 
+                    ? "bg-slate-900 border-slate-700 text-white" 
+                    : suspiciousActivity 
                     ? "bg-red-600 border-red-500 text-white" 
-                    : "bg-gray-900 border-gray-800 text-white"
+                    : "bg-emerald-900 border-emerald-700 text-white"
                 )}>
-                {suspiciousActivity ? <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" /> : <CloudLightning className="w-5 h-5 shrink-0 mt-0.5" />}
-                <p className="font-bold text-sm leading-snug">{alertMsg}</p>
+                  <div className="flex items-center gap-3 w-full">
+                    {suspiciousActivity ? <ShieldAlert className="w-5 h-5 shrink-0" /> : < Zap className="w-5 h-5 shrink-0 text-emerald-400" />}
+                    <p className="font-bold text-sm">{alertMsg}</p>
+                  </div>
                 </div>
             </motion.div>
             )}
@@ -176,41 +205,51 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
             <div className="xl:col-span-2 space-y-8">
-                {/* Stats Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <motion.div whileHover={{ y: -5 }} className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100 relative overflow-hidden group">
-                        <div className="absolute right-0 top-0 w-32 h-32 bg-emerald-50 rounded-full translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-700" />
-                        <div className="relative z-10">
-                            <div className="w-12 h-12 bg-emerald-100 rounded-2xl flex items-center justify-center mb-6">
-                                <Wallet className="w-6 h-6 text-emerald-600" />
+                {/* Visual Engine Pipeline */}
+                <section className="bg-gray-900 p-8 rounded-[32px] shadow-sm border border-gray-800 text-white">
+                     <h2 className="text-xl font-black tracking-tight mb-8">Decision Pipeline Trace</h2>
+                     <div className="flex items-center justify-between">
+                         <div className="flex flex-col items-center">
+                            <div className={cn("w-12 h-12 rounded-full flex items-center justify-center transition-colors", "bg-blue-500")}>
+                                <Navigation className="w-6 h-6 text-white" />
                             </div>
-                            <h3 className="text-gray-400 font-bold text-xs uppercase tracking-widest mb-1">Earnings Rate</h3>
-                            <div className="text-4xl font-black text-gray-900">₹{user?.hourlyEarnings || 0}<span className="text-lg text-gray-400">/hr</span></div>
-                        </div>
-                    </motion.div>
-                    <motion.div whileHover={{ y: -5 }} className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100 relative overflow-hidden group">
-                        <div className="absolute right-0 top-0 w-32 h-32 bg-blue-50 rounded-full translate-x-16 -translate-y-16 group-hover:scale-150 transition-transform duration-700" />
-                        <div className="relative z-10">
-                            <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center mb-6">
-                                <Wind className="w-6 h-6 text-blue-600" />
+                            <span className="text-xs font-bold mt-3 text-gray-400">INPUTS</span>
+                         </div>
+                         <ArrowRight className="w-6 h-6 text-gray-600" />
+                         <div className="flex flex-col items-center">
+                            <div className={cn("w-12 h-12 rounded-full flex items-center justify-center transition-colors", status === 'Disrupted' ? 'bg-orange-500' : 'bg-emerald-500')}>
+                                {status === 'Disrupted' ? <AlertTriangle className="w-6 h-6 text-white"/> : <CheckCircle className="w-6 h-6 text-white"/>}
                             </div>
-                            <h3 className="text-gray-400 font-bold text-xs uppercase tracking-widest mb-1">Weekly Coverage</h3>
-                            <div className="text-4xl font-black text-gray-900">{user?.workingHoursPerDay || 0}h<span className="text-lg text-gray-400">/day</span></div>
-                        </div>
-                    </motion.div>
-                </div>
+                            <span className="text-xs font-bold mt-3 text-gray-400">RISK DETECT</span>
+                         </div>
+                         <ArrowRight className="w-6 h-6 text-gray-600" />
+                         <div className="flex flex-col items-center">
+                            <div className={cn("w-12 h-12 rounded-full flex items-center justify-center transition-colors", trustScore >= 50 ? 'bg-indigo-500' : 'bg-red-500')}>
+                                <ShieldCheck className="w-6 h-6 text-white" />
+                            </div>
+                            <span className="text-xs font-bold mt-3 text-gray-400">TRUST SCORE</span>
+                         </div>
+                         <ArrowRight className="w-6 h-6 text-gray-600" />
+                         <div className="flex flex-col items-center">
+                            <div className={cn("w-12 h-12 rounded-full flex items-center justify-center transition-colors", claimStatus === 'Approved' ? 'bg-emerald-500' : claimStatus === 'Flagged' ? 'bg-red-500' : 'bg-gray-700')}>
+                                <Zap className="w-6 h-6 text-white" />
+                            </div>
+                            <span className="text-xs font-bold mt-3 text-gray-400">DECISION</span>
+                         </div>
+                     </div>
+                </section>
 
                 {/* Environment Section */}
                 <section className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
                     <div className="flex items-center justify-between mb-8">
-                        <h2 className="text-xl font-black tracking-tight">Environmental Monitor</h2>
-                        <div className="px-3 py-1 bg-gray-50 rounded-lg text-[10px] font-black uppercase text-gray-400 border border-gray-100">Live 1s</div>
+                        <h2 className="text-xl font-black tracking-tight flex items-center gap-2">Signal Layer <span className="text-sm font-medium text-gray-400">(Environment Inputs)</span></h2>
+                        <div className="px-3 py-1 bg-gray-50 rounded-lg text-[10px] font-black uppercase text-gray-400 border border-gray-100">Simulated</div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <div className="p-6 rounded-2xl bg-[#F0F9FF] border border-blue-50">
+                        <div className={cn("p-6 rounded-2xl border transition-all duration-500", weather.rainfall > 50 ? "bg-blue-50 border-blue-100" : "bg-[#F0F9FF] border-blue-50")}>
                             <CloudRain className="w-10 h-10 text-blue-500 mb-6" />
-                            <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">Condition</p>
-                            <p className="text-lg font-black text-blue-900 leading-none mt-1">{weather.condition}</p>
+                            <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">Rainfall</p>
+                            <p className="text-lg font-black text-blue-900 leading-none mt-1">{weather.condition} {weather.rainfall > 50 && `(${weather.rainfall}mm)`}</p>
                         </div>
                         <div className={cn("p-6 rounded-2xl border transition-all duration-500", weather.aqi > 300 ? "bg-red-50 border-red-100" : "bg-gray-50 border-gray-100")}>
                             <Wind className={cn("w-10 h-10 mb-6 transition-colors", weather.aqi > 300 ? "text-red-500" : "text-gray-400")} />
@@ -227,32 +266,34 @@ export default function Dashboard() {
 
                 {/* Active Claims */}
                 {claimStatus !== 'None' && (
-                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={cn("p-8 rounded-[32px] border relative overflow-hidden", claimStatus === 'Flagged' ? "bg-red-50 border-red-100" : "bg-emerald-50 border-emerald-100")}>
+                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={cn("p-8 rounded-[32px] border relative overflow-hidden", claimStatus === 'Flagged' ? "bg-red-50 border-red-100" : claimStatus === 'Pending' ? "bg-yellow-50 border-yellow-100" : "bg-emerald-50 border-emerald-100")}>
                         <div className="flex items-start justify-between relative z-10">
                             <div className="space-y-6">
                                 <div className="flex items-center gap-3">
-                                    <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", claimStatus === 'Flagged' ? "bg-red-100" : "bg-emerald-100")}>
-                                        {claimStatus === 'Flagged' ? <AlertTriangle className="w-5 h-5 text-red-600" /> : <CheckCircle className="w-5 h-5 text-emerald-600" />}
+                                    <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", claimStatus === 'Flagged' ? "bg-red-100" : claimStatus === 'Pending' ? "bg-yellow-100" : "bg-emerald-100")}>
+                                        {claimStatus === 'Flagged' ? <AlertTriangle className="w-5 h-5 text-red-600" /> : <CheckCircle className={cn("w-5 h-5", claimStatus === 'Pending' ? "text-yellow-600" : "text-emerald-600")} />}
                                     </div>
-                                    <h2 className={cn("text-xl font-black tracking-tight", claimStatus === 'Flagged' ? "text-red-900" : "text-emerald-900")}>
-                                        {claimStatus === 'Flagged' ? "Partial Payout Issued" : "Claim Approved"}
+                                    <h2 className={cn("text-xl font-black tracking-tight", claimStatus === 'Flagged' ? "text-red-900" : claimStatus === 'Pending' ? "text-yellow-900" : "text-emerald-900")}>
+                                        {claimStatus === 'Flagged' ? "Payout Flagged (Trust Hold)" : claimStatus === 'Pending' ? "Delayed Payout Issued" : "Instant Payout Released"}
                                     </h2>
                                 </div>
                                 <div>
-                                    <p className={cn("text-4xl font-black tracking-tighter", claimStatus === 'Flagged' ? "text-red-600" : "text-emerald-600")}>₹{claimStatus === 'Flagged' ? payoutAmount / 2 : payoutAmount}</p>
-                                    <p className={cn("font-bold text-sm mt-1", claimStatus === 'Flagged' ? "text-red-500" : "text-emerald-500")}>{claimStatus === 'Flagged' ? "⚠️ Under Fraud Review" : "✅ Transferred to Bank Account"}</p>
+                                    <p className={cn("text-4xl font-black tracking-tighter", claimStatus === 'Flagged' ? "text-red-600" : claimStatus === 'Pending' ? "text-yellow-600" : "text-emerald-600")}>₹{payoutAmount}</p>
+                                    <p className={cn("font-bold text-sm mt-1", claimStatus === 'Flagged' ? "text-red-500" : claimStatus === 'Pending' ? "text-yellow-500" : "text-emerald-500")}>
+                                        {claimStatus === 'Flagged' ? "⚠️ Low Trust Score. Requires Manual Fraud Review." : claimStatus === 'Pending' ? "⏳ Transferred in 24h due to Medium Risk Profile" : "✅ Transferred instantly (Low Risk)"}
+                                    </p>
                                 </div>
                             </div>
                         </div>
-                        <div className={cn("absolute -right-16 -bottom-16 w-64 h-64 rounded-full opacity-10", claimStatus === 'Flagged' ? "bg-red-600" : "bg-emerald-600")} />
+                        <div className={cn("absolute -right-16 -bottom-16 w-64 h-64 rounded-full opacity-10", claimStatus === 'Flagged' ? "bg-red-600" : claimStatus === 'Pending' ? "bg-yellow-600" : "bg-emerald-600")} />
                     </motion.div>
                 )}
 
-                {/* History Table (Summary) */}
+                {/* History Table */}
+                {payoutHistory.length > 0 && (
                 <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
                     <div className="flex items-center justify-between mb-8">
-                        <h2 className="text-xl font-black tracking-tight">Recent Payouts</h2>
-                        <Link to="/earnings" className="text-emerald-600 font-bold text-sm hover:underline">View All</Link>
+                        <h2 className="text-xl font-black tracking-tight">Recent Decisions</h2>
                     </div>
                     <div className="space-y-4">
                         {payoutHistory.slice(0, 3).map((p) => (
@@ -272,9 +313,9 @@ export default function Dashboard() {
                                 </div>
                             </div>
                         ))}
-                        {payoutHistory.length === 0 && <p className="text-gray-400 font-bold text-center py-6">No payouts recorded yet.</p>}
                     </div>
                 </div>
+                )}
             </div>
 
             {/* Right Sidebar */}
@@ -282,7 +323,7 @@ export default function Dashboard() {
                 {/* Trust Score Card */}
                 <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100 text-center relative overflow-hidden">
                     <div className="relative z-10">
-                        <h2 className="text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-8">Safety Trust Score</h2>
+                        <h2 className="text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-8">ML Trust Score System</h2>
                         <div className="relative w-48 h-48 mx-auto flex items-center justify-center mb-8">
                             <svg className="absolute inset-0 w-full h-full transform -rotate-90">
                                 <circle cx="96" cy="96" r="84" fill="none" className="stroke-gray-50" strokeWidth="20" />
@@ -291,7 +332,7 @@ export default function Dashboard() {
                             <div className="text-5xl font-black tracking-tighter text-gray-900">{trustScore}<span className="text-2xl text-gray-300">%</span></div>
                         </div>
                         <div className={cn("px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest inline-block border", trustScore >= 80 ? "text-emerald-600 bg-emerald-50 border-emerald-100" : trustScore >= 50 ? "text-yellow-600 bg-yellow-50 border-yellow-100" : "text-red-600 bg-red-50 border-red-100")}>
-                            {trustScore >= 80 ? 'Verified Safe' : trustScore >= 50 ? 'Medium Risk' : 'High Risk Flag'}
+                            {trustScore >= 80 ? 'Low Risk (Verified)' : trustScore >= 50 ? 'Medium Risk Profile' : 'High Risk Profile'}
                         </div>
                     </div>
                 </div>
@@ -299,9 +340,13 @@ export default function Dashboard() {
                 {/* Simulation Tools */}
                 <div className="bg-gray-900 p-8 rounded-[32px] shadow-2xl shadow-gray-200">
                     <h2 className="text-white text-lg font-black tracking-tight mb-8 flex items-center gap-2">
-                        <Zap className="w-5 h-5 text-emerald-500 fill-emerald-500" /> Demo Controls
+                        <Zap className="w-5 h-5 text-emerald-500 fill-emerald-500" /> System Simulator
                     </h2>
                     <div className="space-y-3">
+                        <button onClick={simulateSafe} className="w-full text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-emerald-500/20 hover:border-emerald-500 transition-all flex items-center justify-between group">
+                            <span className="text-sm font-bold text-gray-300 group-hover:text-emerald-400 transition-colors">Simulate Normal Day</span>
+                            <CheckCircle className="w-5 h-5 text-gray-600 group-hover:text-emerald-500 transition-colors" />
+                        </button>
                         <button onClick={() => simulateDisruption('rain')} className="w-full text-left p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-blue-500 transition-all flex items-center justify-between group">
                             <span className="text-sm font-bold text-gray-300 group-hover:text-white transition-colors">Simulate Heavy Rain</span>
                             <CloudRain className="w-5 h-5 text-gray-600 group-hover:text-blue-500 transition-colors" />
@@ -314,9 +359,10 @@ export default function Dashboard() {
                             <span className="text-sm font-bold text-gray-300 group-hover:text-white transition-colors">Simulate Heatwave</span>
                             <ThermometerSun className="w-5 h-5 text-gray-600 group-hover:text-orange-500 transition-colors" />
                         </button>
-                        <div className="pt-8 mt-4 border-t border-white/10">
+                        <div className="pt-8 mt-4 border-t border-white/10 text-center">
+                            <span className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-4">Fraud Engine Testing</span>
                             <button onClick={simulateFraud} className="w-full text-left p-4 rounded-2xl bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500 transition-all flex items-center justify-between group">
-                                <span className="text-sm font-black text-red-500 uppercase tracking-widest">Trigger Fraud</span>
+                                <span className="text-sm font-black text-red-500 uppercase tracking-widest">Simulate GPS Spoofing</span>
                                 <ShieldAlert className="w-5 h-5 text-red-500" />
                             </button>
                         </div>
@@ -330,21 +376,14 @@ export default function Dashboard() {
                             <Activity className="absolute -right-8 -bottom-8 w-48 h-48 text-red-500 opacity-50" />
                             <div className="relative z-10">
                                 <h2 className="text-white text-xs font-black uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                                    <ShieldCheck className="w-4 h-4" /> Fraud Insights
+                                    <ShieldCheck className="w-4 h-4" /> Fraud Insights Log
                                 </h2>
                                 <ul className="space-y-4">
                                     <li className="flex gap-3 bg-black/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm">
                                         <Navigation className="w-5 h-5 text-red-200 shrink-0 mt-0.5" />
                                         <div>
-                                            <p className="text-xs font-black text-white uppercase tracking-wider">GPS Mismatch</p>
-                                            <p className="text-[10px] text-red-100 font-medium leading-relaxed mt-1">Device location data differs from network cell towers by 1.2km.</p>
-                                        </div>
-                                    </li>
-                                    <li className="flex gap-3 bg-black/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm">
-                                        <Activity className="w-5 h-5 text-red-200 shrink-0 mt-0.5" />
-                                        <div>
-                                            <p className="text-xs font-black text-white uppercase tracking-wider">Unusual Velocity</p>
-                                            <p className="text-[10px] text-red-100 font-medium leading-relaxed mt-1">Detected movement speed of 120km/h in a traffic-heavy rain zone.</p>
+                                            <p className="text-xs font-black text-white uppercase tracking-wider">Unusual Velocity Matrix</p>
+                                            <p className="text-[10px] text-red-100 font-medium leading-relaxed mt-1">Detected input speed of &gt;120km/h on a gig delivery session. Immediate High Risk Flag triggered.</p>
                                         </div>
                                     </li>
                                 </ul>

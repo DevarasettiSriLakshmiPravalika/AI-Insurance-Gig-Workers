@@ -16,4 +16,8 @@ public class Payout {
     private Double amount;
     private String reason;
     private LocalDateTime timestamp;
+    
+    private Integer trustScore;
+    private String riskLevel;
+    private String status;
 }
